@@ -1,0 +1,33 @@
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: jelly
+      POSTGRES_USER: ${DB_USERNAME:-jelly}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-jelly}
+    ports:
+      # Published so the app can also run from the IDE against this database
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      TMDB_API_TOKEN: ${TMDB_API_TOKEN:?Set TMDB_API_TOKEN in .env (see .env.example)}
+      DB_URL: jdbc:postgresql://db:5432/jelly
+      DB_USERNAME: ${DB_USERNAME:-jelly}
+      DB_PASSWORD: ${DB_PASSWORD:-jelly}
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  db-data:

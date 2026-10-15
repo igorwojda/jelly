@@ -1,0 +1,359 @@
+{
+  "info": {
+    "name": "Jelly Backend",
+    "description": "Jelly Backend API (`/api/v1`).\n\n- **Happy path**: run in order. Browses movies, opens the first one, adds it to favorites (twice, to show idempotency), lists favorites and removes it again. Each run uses a new random `userId`, so it starts from an empty favorites list.\n- **Errors**: invalid input (400) and missing resources (404). Every error body is an RFC 9457 problem detail.\n\nStart the backend first: `docker compose up --build` (see README). Override `baseUrl` to target another host.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080/api/v1" },
+    { "key": "userId", "value": "" },
+    { "key": "movieId", "value": "238" },
+    { "key": "unknownMovieId", "value": "999999999" }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "if (!pm.collectionVariables.get(\"userId\")) {",
+          "    pm.collectionVariables.set(\"userId\", pm.variables.replaceIn(\"{{$guid}}\"));",
+          "}"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Happy path",
+      "item": [
+        {
+          "name": "List top rated movies",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// New user per run, so the scenario starts from an empty favorites list",
+                  "pm.collectionVariables.set(\"userId\", pm.variables.replaceIn(\"{{$guid}}\"));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "",
+                  "const page = pm.response.json();",
+                  "pm.test(\"Returns the first page\", () => {",
+                  "    pm.expect(page.page).to.eql(1);",
+                  "    pm.expect(page.totalPages).to.be.within(1, 500);",
+                  "});",
+                  "pm.test(\"Movies have id, title and poster URL\", () => {",
+                  "    pm.expect(page.results).to.be.an(\"array\").that.is.not.empty;",
+                  "    page.results.forEach(movie => {",
+                  "        pm.expect(movie.id).to.be.a(\"number\");",
+                  "        pm.expect(movie.title).to.be.a(\"string\");",
+                  "        pm.expect(movie).to.have.property(\"posterUrl\");",
+                  "    });",
+                  "});",
+                  "",
+                  "// The next requests use the first movie of the list",
+                  "pm.collectionVariables.set(\"movieId\", page.results[0].id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/movies?category=top_rated&page=1",
+            "description": "Categories: `upcoming`, `top_rated`, `now_playing`. Pages 1 to 500, 20 movies each."
+          }
+        },
+        {
+          "name": "Get movie details",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "",
+                  "const movie = pm.response.json();",
+                  "pm.test(\"Returns the requested movie\", () => {",
+                  "    pm.expect(movie.id).to.eql(Number(pm.collectionVariables.get(\"movieId\")));",
+                  "    pm.expect(movie.title).to.be.a(\"string\");",
+                  "    pm.expect(movie.overview).to.be.a(\"string\");",
+                  "    pm.expect(movie.rating).to.be.within(0, 10);",
+                  "    pm.expect(movie).to.have.property(\"releaseYear\");",
+                  "    pm.expect(movie).to.have.property(\"posterUrl\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/movies/{{movieId}}"
+          }
+        },
+        {
+          "name": "Add favorite",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 201 Created\", () => pm.response.to.have.status(201));",
+                  "pm.test(\"Returns the added movie\", () => {",
+                  "    pm.expect(pm.response.json().id).to.eql(Number(pm.collectionVariables.get(\"movieId\")));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "url": "{{baseUrl}}/users/{{userId}}/favorites/{{movieId}}"
+          }
+        },
+        {
+          "name": "Add same favorite again (idempotent)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200 OK, not a duplicate\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Returns the existing favorite\", () => {",
+                  "    pm.expect(pm.response.json().id).to.eql(Number(pm.collectionVariables.get(\"movieId\")));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "url": "{{baseUrl}}/users/{{userId}}/favorites/{{movieId}}",
+            "description": "Adding an existing favorite is safe to retry: 200 instead of 201, no duplicate."
+          }
+        },
+        {
+          "name": "List favorites",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Contains the added movie once\", () => {",
+                  "    const ids = pm.response.json().map(movie => movie.id);",
+                  "    pm.expect(ids).to.eql([Number(pm.collectionVariables.get(\"movieId\"))]);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/users/{{userId}}/favorites"
+          }
+        },
+        {
+          "name": "Remove favorite",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 204 No Content\", () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "url": "{{baseUrl}}/users/{{userId}}/favorites/{{movieId}}"
+          }
+        },
+        {
+          "name": "List favorites after removal",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Favorites are empty\", () => pm.expect(pm.response.json()).to.eql([]));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/users/{{userId}}/favorites"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Errors",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Body is an RFC 9457 problem detail\", () => {",
+              "    pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/problem+json\");",
+              "    const problem = pm.response.json();",
+              "    pm.expect(problem.status).to.eql(pm.response.code);",
+              "    pm.expect(problem.title).to.be.a(\"string\");",
+              "    pm.expect(problem.detail).to.be.a(\"string\");",
+              "});"
+            ]
+          }
+        }
+      ],
+      "item": [
+        {
+          "name": "Unknown category",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 400 Bad Request\", () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/movies?category=popular"
+          }
+        },
+        {
+          "name": "Page out of range",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 400 Bad Request\", () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/movies?category=upcoming&page=501",
+            "description": "TMDB serves pages 1 to 500 only."
+          }
+        },
+        {
+          "name": "Invalid movie ID",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 400 Bad Request\", () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/movies/abc"
+          }
+        },
+        {
+          "name": "Unknown movie",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 404 Not Found\", () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/movies/{{unknownMovieId}}"
+          }
+        },
+        {
+          "name": "Add unknown movie to favorites",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 404 Not Found\", () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "url": "{{baseUrl}}/users/{{userId}}/favorites/{{unknownMovieId}}"
+          }
+        },
+        {
+          "name": "Remove movie that is not a favorite",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 404 Not Found\", () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "url": "{{baseUrl}}/users/{{userId}}/favorites/{{unknownMovieId}}"
+          }
+        },
+        {
+          "name": "Invalid user ID",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 400 Bad Request\", () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/users/invalid.user/favorites",
+            "description": "User IDs are 1 to 64 characters: letters, digits, `-` and `_`."
+          }
+        }
+      ]
+    }
+  ]
+}
